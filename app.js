@@ -197,8 +197,8 @@ function travelTo(target) {
       arrivalChime();
       // チャイムの後に階数アナウンス（実機と同順序）
       setTimeout(() => announce(`${spokenFloor(target)}です`, `floor-${target}`), 950);
-      // アナウンスが終わってからドアを開く
-      setTimeout(resolve, 2000);
+      // 最長音声(~1.5s)が終わってからドアを開く: 950 + 1500 + 余裕750 = 3200ms
+      setTimeout(resolve, 3200);
     };
     requestAnimationFrame(tick);
   });
