@@ -1,427 +1,279 @@
-const MAX_FLOOR = 201;
-const MIN_FLOOR = 1;
-const FLOOR_HEIGHT_PCT = 100 / (MAX_FLOOR - MIN_FLOOR);
-const ARRIVAL_CHIME_SRC = "assets/chime/mitsubishi-arrival.m4a";
-
-const SELECTABLE_FLOORS = [
-  { value: 201, label: "R" },
-  { value: 200, label: "200" },
-  { value: 150, label: "150" },
-  { value: 100, label: "100" },
-  { value:  50, label: "50" },
-  ...Array.from({ length: 20 }, (_, i) => ({ value: 20 - i, label: String(20 - i) }))
-];
-
-const VOICE_FILES = {
-  destination: "assets/voice/destination.m4a",
-  up:          "assets/voice/up.m4a",
-  down:        "assets/voice/down.m4a",
-  doorClosing: "assets/voice/door-closing.m4a",
-  doorOpening: "assets/voice/door-opening.m4a",
-  emergency:   "assets/voice/emergency.m4a",
-  ...Object.fromEntries(
-    SELECTABLE_FLOORS.map(f => [
-      `floor-${f.value}`,
-      `assets/voice/floor-${f.value === 201 ? "r" : f.value}.m4a`
-    ])
-  )
-};
-
-const state = {
-  currentFloor: 1,
-  visualFloor:  1,
-  queue:        [],
-  moving:       false,
-  direction:    0,
-  doors:        "open",
-  emergency:    false,
-  audioReady:   false,
-  audio:        null,
-  voice:        null,
-  announcementAudio: null,
-  chimeAudio:   null,
-  motor:        null,
-  motorGain:    null,
-  departureTimer: null,
-};
-
-const els = {
-  floorGrid:    document.getElementById("floorGrid"),
-  floorScale:   document.getElementById("floorScale"),
-  car:          document.getElementById("car"),
-  currentFloor: document.getElementById("currentFloor"),
-  targetFloor:  document.getElementById("targetFloor"),
-  speedLabel:   document.getElementById("speedLabel"),
-  doorLabel:    document.getElementById("doorLabel"),
-  arrowUp:      document.getElementById("arrowUp"),
-  arrowDown:    document.getElementById("arrowDown"),
-  floorDisplay: document.getElementById("floorDisplay"),
-  queueLabel:   document.getElementById("queueLabel"),
-};
-
-function floorLabel(floor) { return floor === 201 ? "R" : String(floor); }
-function spokenFloor(floor) { return floor === 201 ? "屋上階" : `${floor}階`; }
-
-function init() {
-  buildFloorButtons();
-  buildScale();
-  wireControls();
-  loadVoices();
-  render();
-}
-
-function buildFloorButtons() {
-  const frag = document.createDocumentFragment();
-  SELECTABLE_FLOORS.forEach(f => {
-    const btn = document.createElement("button");
-    btn.className = "floor-btn";
-    btn.type = "button";
-    btn.dataset.floor = String(f.value);
-    btn.setAttribute("aria-label", f.value === 201 ? "屋上階" : `${f.value}階`);
-    const label = document.createElement("span");
-    label.className = "btn-label";
-    label.textContent = f.label;
-    btn.appendChild(label);
-    frag.appendChild(btn);
-  });
-  els.floorGrid.appendChild(frag);
-}
-
-function buildScale() {
-  const frag = document.createDocumentFragment();
-  [201, 200, 150, 100, 50, 20, 10, 5, 1].forEach(floor => {
-    const el = document.createElement("div");
-    el.className = "floor-mark";
-    el.textContent = floor === 201 ? "RF" : `${floor}F`;
-    el.style.top = `${100 - (floor - 1) * FLOOR_HEIGHT_PCT}%`;
-    frag.appendChild(el);
-  });
-  els.floorScale.appendChild(frag);
-}
-
-function wireControls() {
-  els.floorGrid.addEventListener("click", e => {
-    const btn = e.target.closest("[data-floor]");
-    if (btn) requestFloor(Number(btn.dataset.floor));
-  });
-  document.querySelectorAll("[data-service]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      ensureAudio();
-      const action = btn.dataset.service;
-      if (action === "open")   openDoors(true);
-      if (action === "close")  closeDoors(true);
-      if (action === "bell")   emergencyCall();
-      if (action === "cancel") cancelQueue();
-    });
-  });
-}
-
-function requestFloor(floor) {
-  ensureAudio();
-  if (state.emergency) return;
-  if (floor === state.currentFloor || state.queue.includes(floor)) return;
-  const wasIdle = !state.moving && state.queue.length === 0;
-  state.queue.push(floor);
-  sortQueue();
-  clickTone(880, 0.022, "sine", 0.038);
-  render();
-  if (wasIdle) {
-    // Announce direction while doors still open, then close after voice finishes
-    const dir = Math.sign(floor - state.currentFloor);
-    if (dir !== 0) announce(dir > 0 ? "上にまいります" : "下にまいります", dir > 0 ? "up" : "down");
-    clearTimeout(state.departureTimer);
-    state.departureTimer = setTimeout(() => {
-      if (!state.moving) closeDoors(true).then(processQueue);
-    }, 1600);
-  } else if (!state.moving && !state.departureTimer) {
-    closeDoors(true).then(processQueue);
-  }
-}
-
-function sortQueue() {
-  if (!state.moving) return;
-  state.queue.sort((a, b) => state.direction > 0 ? a - b : b - a);
-}
-
-async function processQueue() {
-  if (state.moving || state.emergency) return;
-  const target = state.queue[0];
-  if (!target) { render(); return; }
-  await travelTo(target);
-  state.queue.shift();
-  await openDoors(true);
-  state.departureTimer = null;
-  setTimeout(() => {
-    if (state.queue.length && !state.emergency) {
-      const dir = Math.sign(state.queue[0] - state.currentFloor);
-      if (dir !== 0) announce(dir > 0 ? "上にまいります" : "下にまいります", dir > 0 ? "up" : "down");
-      state.departureTimer = setTimeout(() => {
-        state.departureTimer = null;
-        if (!state.moving) closeDoors(true).then(processQueue);
-      }, 1400);
-    }
-  }, 1550);
-}
-
-function travelTo(target) {
-  return new Promise(resolve => {
-    const start = state.currentFloor;
-    const dist  = Math.abs(target - start);
-    // 20階以上は高速運転モード（約2.5倍速）
-    const baseDuration = Math.max(6000, dist * 1600 + 3500);
-    const duration = dist >= 20 ? Math.round(baseDuration / 2.5) : baseDuration;
-    const startedAt = performance.now();
-
-    state.moving    = true;
-    state.direction = Math.sign(target - start);
-    state.doors     = "closed";
-    state.departureTimer = null;
-
-    startMotor(dist);
-    render();
-
-    const tick = now => {
-      const progress = Math.min((now - startedAt) / duration, 1);
-      const eased = easeInOutCubic(progress);
-      state.visualFloor  = start + (target - start) * eased;
-      state.currentFloor = Math.round(state.visualFloor);
-      updateMotorPitch(progress, dist);
-      render();
-      if (progress < 1) { requestAnimationFrame(tick); return; }
-      state.currentFloor = target;
-      state.visualFloor  = target;
-      state.moving       = false;
-      state.direction    = 0;
-      stopMotor();
-      render();
-      arrivalChime();
-      // チャイムの後に階数アナウンス（実機と同順序）
-      setTimeout(() => announce(`${spokenFloor(target)}です`, `floor-${target}`), 950);
-      // 最長音声(~1.5s)が終わってからドアを開く: 950 + 1500 + 余裕750 = 3200ms
-      setTimeout(resolve, 3200);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
-function closeDoors(withSound) {
-  return new Promise(resolve => {
-    if (state.doors === "closed") { resolve(); return; }
-    state.doors = "closing";
-    if (withSound) {
-      if (Math.random() < 0.01) doorSafetyWarning();
-      if (Math.random() < 0.3) doorTone(false);
-      announce("ドアが閉まります", "doorClosing");
-    }
-    render();
-    setTimeout(() => { state.doors = "closed"; render(); resolve(); }, 850);
-  });
-}
-
-function openDoors(withSound) {
-  return new Promise(resolve => {
-    state.doors = "opening";
-    if (withSound) {
-      if (Math.random() < 0.3) doorTone(true);
-      announce("ドアが開きます", "doorOpening");
-    }
-    render();
-    setTimeout(() => {
-      state.doors = "open";
-      render();
-      setTimeout(() => {
-        if (!state.queue.length && !state.moving && !state.emergency)
-          announce("行き先ボタンを押してください", "destination");
-      }, 1200);
-      resolve();
-    }, 880);
-  });
-}
-
-function emergencyCall() {
-  state.emergency = !state.emergency;
-  if (state.emergency) {
-    state.queue = [];
-    stopMotor();
-    state.moving = false;
-    alarmTone();
-    announce("非常ボタンが押されました。係員におつなぎしています", "emergency");
-    document.querySelector(".emg-btn").classList.add("active");
-  } else {
-    clickTone(520, 0.12, "sine", 0.06);
-    document.querySelector(".emg-btn").classList.remove("active");
-  }
-  render();
-}
-
-function cancelQueue() {
-  state.queue = [];
-  clickTone(260, 0.08, "triangle", 0.05);
-  render();
-}
-
-function render() {
-  const floor = Math.max(MIN_FLOOR, Math.min(MAX_FLOOR, state.visualFloor));
-  const carBottom = (floor - MIN_FLOOR) * FLOOR_HEIGHT_PCT;
-  els.car.style.bottom = `${carBottom}%`;
-  els.car.classList.toggle("open",   state.doors === "open" || state.doors === "opening");
-  els.car.classList.toggle("moving", state.moving);
-
-  els.currentFloor.textContent = floorLabel(state.currentFloor);
-  els.targetFloor.textContent  = state.queue[0] ? floorLabel(state.queue[0]) : "---";
-  els.speedLabel.textContent   = state.moving ? "運転中" : "停止";
-  const doorTexts = { open: "開", closed: "閉", opening: "開動作", closing: "閉動作" };
-  els.doorLabel.textContent = doorTexts[state.doors] ?? "---";
-
-  els.arrowUp.classList.toggle("active",   state.direction > 0);
-  els.arrowDown.classList.toggle("active", state.direction < 0);
-
-  els.floorDisplay.textContent = floorLabel(state.currentFloor);
-
-  els.queueLabel.textContent = state.queue.length
-    ? state.queue.map(floorLabel).join(" → ")
-    : "なし";
-
-  document.querySelectorAll(".floor-btn").forEach(btn => {
-    const n = Number(btn.dataset.floor);
-    const isSelected = state.queue.includes(n);
-    const isCurrent  = n === state.currentFloor;
-    btn.classList.toggle("lit",     isSelected);
-    btn.classList.toggle("current", isCurrent && !isSelected);
-  });
-}
-
-function easeInOutCubic(t) {
-  return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2;
-}
-
-function ensureAudio() {
-  if (state.audioReady) return;
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  state.audio = new Ctx();
-  state.audioReady = true;
-  loadVoices();
-}
-
-function doorTone(opening) {
-  // ドア開閉警告音（ピッピッピッピッ×6回）
-  const freq = opening ? 2600 : 2200;
-  for (let i = 0; i < 6; i++) {
-    setTimeout(() => clickTone(freq, 0.065, "square", 0.055), i * 130);
-  }
-}
-
-function clickTone(freq, dur, type, vol) {
-  if (!state.audio) return;
-  const now = state.audio.currentTime;
-  const osc  = state.audio.createOscillator();
-  const gain = state.audio.createGain();
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, now);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(vol,    now + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-  osc.connect(gain).connect(state.audio.destination);
-  osc.start(now);
-  osc.stop(now + dur + 0.02);
-}
-
-function arrivalChime() {
-  // 到着チャイムは合成音（ding-dong）
-  fallbackChime();
-}
-
-function fallbackChime() {
-  clickTone(880, 0.16, "sine", 0.06);
-  setTimeout(() => clickTone(659, 0.22, "sine", 0.052), 155);
-}
-
-function doorSafetyWarning() {
-  // ドア安全センサー警告音（1%で発動）
-  if (!("Audio" in window)) return;
-  const a = new Audio(ARRIVAL_CHIME_SRC);
-  a.volume = 0.85;
-  a.play().catch(() => {});
-}
-
-function alarmTone() {
-  // エレベーター非常ベル：断続的な高音（実機に近い連続ベルパターン）
-  for (let i = 0; i < 8; i++) {
-    setTimeout(() => clickTone(1320, 0.09, "square", 0.07), i * 220);
-  }
-}
-
-function startMotor(dist) {
-  if (!state.audio) return;
-  stopMotor();
-  const now  = state.audio.currentTime;
-  const osc  = state.audio.createOscillator();
-  const gain = state.audio.createGain();
-  const filt = state.audio.createBiquadFilter();
-  osc.type = "sawtooth";
-  osc.frequency.setValueAtTime(48, now);
-  filt.type = "lowpass";
-  filt.frequency.setValueAtTime(220, now);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(Math.min(0.055, 0.018 + dist / 4000), now + 0.45);
-  osc.connect(filt).connect(gain).connect(state.audio.destination);
-  osc.start(now);
-  state.motor     = osc;
-  state.motorGain = gain;
-}
-
-function updateMotorPitch(progress, dist) {
-  if (!state.motor || !state.audio) return;
-  const now   = state.audio.currentTime;
-  const speed = Math.sin(progress * Math.PI);
-  const freq  = 42 + speed * (82 + Math.min(dist, 120) * 0.34) * 1.42;
-  state.motor.frequency.setTargetAtTime(freq, now, 0.06);
-}
-
-function stopMotor() {
-  if (!state.motor || !state.audio) return;
-  const now = state.audio.currentTime;
-  state.motorGain.gain.cancelScheduledValues(now);
-  state.motorGain.gain.setTargetAtTime(0.0001, now, 0.16);
-  state.motor.stop(now + 0.5);
-  state.motor     = null;
-  state.motorGain = null;
-}
-
-function announce(text, key) {
-  const src = VOICE_FILES[key];
-  if (src && "Audio" in window) {
-    if (state.announcementAudio) { state.announcementAudio.pause(); state.announcementAudio.currentTime = 0; }
-    const a = new Audio(src);
-    a.volume = 0.92;
-    state.announcementAudio = a;
-    a.play().catch(() => speakWithSynth(text));
+"use strict";
+const { Elevator } = window.ElevatorModel;
+const $ = (id) => document.getElementById(id);
+const floorLabel = (floor) => (floor === 201 ? "R" : String(floor));
+const spokenFloor = (floor) => (floor === 201 ? "屋上階" : `${floor}階`);
+const clip = (key, text) => ({ src: `assets/voice/${key}.m4a`, text });
+const audio = new window.ElevatorAudio((text) => {
+  $("announcement").textContent = text;
+});
+let engine;
+function onEvent(event) {
+  if (event.type === "reset") {
+    audio.cancel();
+    $("announcement").textContent = "行先階のボタンを押してください";
     return;
   }
-  speakWithSynth(text);
+  let items = [];
+  if (event.type === "departure") {
+    audio.queue.cancel();
+    if (event.direction)
+      items.push(
+        clip(
+          event.direction > 0 ? "up" : "down",
+          event.direction > 0 ? "上にまいります" : "下にまいります",
+        ),
+      );
+    if (event.close) items.push(clip("door-closing", "ドアが閉まります"));
+  }
+  if (event.type === "arrival") {
+    audio.stopMotor();
+    items = [
+      { src: "assets/chime/arrival.m4a", text: "♪ 到着チャイム", chime: true },
+      clip(
+        `floor-${event.floor === 201 ? "r" : event.floor}`,
+        `${spokenFloor(event.floor)}です`,
+      ),
+    ];
+  }
+  if (event.type === "opening") {
+    audio.queue.cancel();
+    items = [clip("door-opening", "ドアが開きます")];
+  }
+  if (event.type === "intercom") {
+    $("callButton").setAttribute("aria-pressed", String(event.active));
+    if (event.active)
+      audio.say([
+        clip("emergency", "非常呼出の体験中です（外部への通報はありません）"),
+      ]);
+    else $("announcement").textContent = "非常呼出の体験を終了しました";
+    return;
+  }
+  if (items.length || event.type === "departure")
+    audio.say(items).then(() => {
+      if (event.token === engine.sequence) {
+        engine.release(event.token);
+        $("announcement").textContent =
+          event.type === "arrival"
+            ? `${spokenFloor(event.floor)}に到着しました`
+            : "行先階のボタンを押してください";
+      }
+    });
 }
+engine = new Elevator(onEvent);
 
-function speakWithSynth(text) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "ja-JP";
-  if (state.voice) u.voice = state.voice;
-  u.rate = 0.86; u.pitch = 1.08; u.volume = 0.86;
-  window.speechSynthesis.speak(u);
+// Paired rows: numbers increase from the bottom toward the top.
+const rows = [
+  [100, 150, 200, 201],
+  [50, null, null, null],
+  [17, 18, 19, 20],
+  [13, 14, 15, 16],
+  [9, 10, 11, 12],
+  [5, 6, 7, 8],
+  [1, 2, 3, 4],
+];
+const buttons = new Map();
+let lastPress = { floor: null, time: -Infinity };
+for (const [rowIndex, row] of rows.entries())
+  for (const [columnIndex, floor] of row.entries()) {
+    if (floor === null) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `floor-btn${floor >= 50 ? " express" : ""}${floor === 1 ? " main-floor" : ""}`;
+    button.dataset.floor = floor;
+    button.style.setProperty("--row", rowIndex + 1);
+    button.style.setProperty("--column", columnIndex + 1);
+    button.style.setProperty(
+      "--compact-row",
+      floor > 20 ? 1 : Math.floor((20 - floor) / 5) + 2,
+    );
+    button.style.setProperty(
+      "--compact-column",
+      floor > 20
+        ? [50, 100, 150, 200, 201].indexOf(floor) + 1
+        : ((floor - 1) % 5) + 1,
+    );
+    button.setAttribute("aria-label", spokenFloor(floor));
+    button.setAttribute("aria-pressed", "false");
+    const label = document.createElement("span");
+    label.className = "btn-label";
+    label.textContent = floorLabel(floor);
+    button.appendChild(label);
+    button.addEventListener("click", () => {
+      audio.unlock();
+      const now = performance.now();
+      if (
+        lastPress.floor === floor &&
+        now - lastPress.time < 450 &&
+        engine.pending.has(floor)
+      ) {
+        if (engine.cancel(floor)) {
+          audio.tone(440);
+          $("announcement").textContent =
+            `${spokenFloor(floor)}の予約を取り消しました`;
+        } else {
+          $("announcement").textContent = "この階への停車は確定しています";
+        }
+        lastPress = { floor: null, time: -Infinity };
+      } else {
+        if (engine.request(floor)) audio.tone();
+        lastPress = { floor, time: now };
+      }
+      render();
+    });
+    buttons.set(floor, button);
+    $("floorGrid").appendChild(button);
+  }
+
+$("openButton").addEventListener("pointerdown", (event) => {
+  audio.unlock();
+  $("openButton").setPointerCapture(event.pointerId);
+  engine.holdOpen(true);
+});
+for (const name of ["pointerup", "pointercancel", "lostpointercapture"])
+  $("openButton").addEventListener(name, () => engine.holdOpen(false));
+$("openButton").addEventListener("click", () => {
+  audio.unlock();
+  engine.openDoor();
+  render();
+});
+$("openButton").addEventListener("keydown", (event) => {
+  if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+    audio.unlock();
+    engine.holdOpen(true);
+  }
+});
+$("openButton").addEventListener("keyup", () => engine.holdOpen(false));
+$("openButton").addEventListener("blur", () => engine.holdOpen(false));
+$("closeButton").addEventListener("click", () => {
+  audio.unlock();
+  engine.closeDoor();
+  render();
+});
+$("callButton").addEventListener("click", () => {
+  audio.unlock();
+  engine.call();
+  render();
+});
+$("soundButton").addEventListener("click", () => {
+  audio.unlock();
+  audio.setEnabled(!audio.enabled);
+  $("soundButton").textContent = `音声 ${audio.enabled ? "ON" : "OFF"}`;
+  $("soundButton").setAttribute("aria-pressed", String(audio.enabled));
+});
+$("resetButton").addEventListener("click", () => {
+  audio.unlock();
+  engine.reset();
+  lastPress = { floor: null, time: -Infinity };
+  $("callButton").setAttribute("aria-pressed", "false");
+  render();
+});
+document.addEventListener("visibilitychange", () => {
+  engine.holdOpen(false);
+  if (document.hidden) audio.stopMotor();
+  lastFrame = performance.now();
+});
+
+// Seven-segment geometry, shared by the two floor indicators.
+const segments = {
+  a: "8,2 32,2 36,6 31,10 9,10 4,6",
+  b: "33,12 38,8 38,31 34,35 30,31 30,16",
+  c: "34,39 38,43 38,66 33,62 30,58 30,43",
+  d: "9,64 31,64 36,68 32,72 8,72 4,68",
+  e: "2,43 6,39 10,43 10,58 7,62 2,66",
+  f: "2,8 7,12 10,16 10,31 6,35 2,31",
+  g: "8,33 32,33 36,37 32,41 8,41 4,37",
+  h: "20,42 28,42 38,68 32,72",
+};
+const digits = {
+  0: "abcdef",
+  1: "bc",
+  2: "abdeg",
+  3: "abcdg",
+  4: "bcfg",
+  5: "acdfg",
+  6: "acdefg",
+  7: "abc",
+  8: "abcdefg",
+  9: "abcdfg",
+  R: "efgabh",
+};
+let previousFloor = null;
+function renderDigits(floor) {
+  if (floor === previousFloor) return;
+  previousFloor = floor;
+  for (const display of document.querySelectorAll("[data-display]")) {
+    display.replaceChildren();
+    display.setAttribute("aria-label", `現在階 ${spokenFloor(floor)}`);
+    for (const char of floorLabel(floor)) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 40 74");
+      svg.setAttribute("aria-hidden", "true");
+      for (const [name, points] of Object.entries(segments)) {
+        if (name === "h" && char !== "R") continue;
+        const path = document.createElementNS(svg.namespaceURI, "polygon");
+        path.setAttribute("points", points);
+        path.setAttribute(
+          "class",
+          `segment${digits[char].includes(name) ? " on" : ""}`,
+        );
+        svg.appendChild(path);
+      }
+      display.appendChild(svg);
+    }
+  }
 }
-
-function loadVoices() {
-  if (!("speechSynthesis" in window)) return;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) { window.speechSynthesis.onvoiceschanged = loadVoices; return; }
-  const ja = voices.filter(v => /^ja(-|_)?JP/i.test(v.lang) || /Japanese|Kyoko|Nanami|Haruka|Sayaka/i.test(v.name));
-  const hints = ["Kyoko","Nanami","Haruka","Sayaka","Google 日本語","Japanese Japan"];
-  state.voice =
-    hints.map(h => ja.find(v => v.name.includes(h))).find(Boolean) ||
-    ja.find(v => !/Otoya|Ichiro|Male|男/i.test(v.name)) ||
-    ja[0] || voices[0];
+const phaseNames = {
+  idle: "待機中",
+  open: "ドアが開いています",
+  preparing: "出発します",
+  closing: "ドアが閉まります",
+  running: "運転中",
+  arrival: "到着しました",
+  opening: "ドアが開きます",
+};
+function render() {
+  renderDigits(engine.floor);
+  $("doorway").style.setProperty("--door-open", `${engine.door * 100}%`);
+  $("landingFloor").textContent = `${floorLabel(Math.round(engine.position))}F`;
+  const displayDirection = engine.phase === "idle" ? 0 : engine.direction;
+  for (const arrow of document.querySelectorAll("[data-direction]")) {
+    arrow.classList.toggle("active", displayDirection !== 0);
+    arrow.classList.toggle("down", displayDirection < 0);
+    arrow.setAttribute(
+      "aria-label",
+      displayDirection > 0 ? "上り" : displayDirection < 0 ? "下り" : "停止",
+    );
+  }
+  for (const [floor, button] of buttons) {
+    const selected = engine.pending.has(floor);
+    button.classList.toggle("lit", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  }
+  const running = ["running", "arrival"].includes(engine.phase);
+  $("openButton").disabled = running;
+  $("closeButton").disabled = engine.phase !== "open";
+  $("screenMessage").textContent = engine.intercom
+    ? "非常呼出中（体験）"
+    : phaseNames[engine.phase];
+  $("phaseLabel").textContent = phaseNames[engine.phase];
+  $("targetLabel").textContent = engine.target
+    ? `${floorLabel(engine.target)}F`
+    : "—";
+  $("speedLabel").textContent = `${(engine.speed * 4).toFixed(1)} m/s`;
+  $("queueLabel").textContent =
+    [...engine.pending]
+      .sort((a, b) => a - b)
+      .map((f) => `${floorLabel(f)}F`)
+      .join("・") || "なし";
+  audio.motor(engine.speed);
 }
-
-init();
+let lastFrame = performance.now();
+function frame(now) {
+  if (!document.hidden) engine.update((now - lastFrame) / 1000);
+  lastFrame = now;
+  render();
+  requestAnimationFrame(frame);
+}
+render();
+requestAnimationFrame(frame);

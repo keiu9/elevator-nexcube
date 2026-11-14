@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width"
+  /><title>録音と再生順序の検証</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #222;
+      color: #eee;
+    }
+    button {
+      font: inherit;
+      padding: 16px;
+    }
+    pre {
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+  </style>
+  <h1>録音と再生順序の検証</h1>
+  <p>
+    全階のAACデコードと音量を検証し、到着チャイム→20階→戸開を実際の再生終了まで順に流します。
+  </p>
+  <button id="run">検証する</button>
+  <pre id="result">未実行</pre>
+  <script src="../elevator.js"></script>
+  <script src="../audio.js"></script>
+  <script>
+    const output = document.getElementById("result");
+    const log = (text) => {
+      output.textContent += text + "\n";
+    };
+    document.getElementById("run").onclick = async () => {
+      document.getElementById("run").disabled = true;
+      output.textContent = "";
+      const sounds = new ElevatorAudio((text) => log("再生: " + text));
+      sounds.unlock();
+      let active = 0,
+        maximum = 0;
+      const original = sounds.context.createBufferSource.bind(sounds.context);
+      sounds.context.createBufferSource = () => {
+        const source = original(),
+          start = source.start.bind(source);
+        source.start = (...args) => {
+          active++;
+          maximum = Math.max(maximum, active);
+          return start(...args);
+        };
+        source.addEventListener("ended", () => {
+          active--;
+          log("終了");
+        });
+        return source;
+      };
+      try {
+        const keys = [
+          "destination",
+          "up",
+          "down",
+          "door-closing",
+          "door-opening",
+          "emergency",
+          ...ElevatorModel.FLOORS.map((f) => "floor-" + (f === 201 ? "r" : f)),
+        ];
+        for (const key of keys) {
+          const buffer = await sounds.buffer("../assets/voice/" + key + ".m4a");
+          if (!(buffer.duration > 0 && buffer.duration < 10))
+            throw Error("不正な長さ: " + key);
+          let peak = 0;
+          for (let c = 0; c < buffer.numberOfChannels; c++)
+            for (const sample of buffer.getChannelData(c))
+              peak = Math.max(peak, Math.abs(sample));
+          if (!(peak > 0 && peak <= 0.851)) throw Error("不正な音量: " + key);
+          log(
+            "OK " +
+              key +
+              " " +
+              buffer.duration.toFixed(2) +
+              "s / peak " +
+              peak.toFixed(2),
+          );
+        }
+        log("全" + keys.length + "録音のデコード成功");
+        await sounds.say([
+          {
+            src: "../assets/chime/arrival.m4a",
+            text: "到着チャイム",
+            chime: true,
+          },
+          { src: "../assets/voice/floor-20.m4a", text: "20階です" },
+          { src: "../assets/voice/door-opening.m4a", text: "ドアが開きます" },
+        ]);
+        if (maximum !== 1 || active !== 0) throw Error("再生重複または未完了");
+        log("PASS: 全録音 / 再生完了 / 最大同時再生数 " + maximum);
+      } catch (error) {
+        log("FAIL: " + error.message);
+      }
+    };
+  </script>
+</html>
