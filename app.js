@@ -62,37 +62,22 @@ function onEvent(event) {
 }
 engine = new Elevator(onEvent);
 
-// Paired rows: numbers increase from the bottom toward the top.
+// One fixed floor order in every orientation; touch targets scale with the viewport.
 const rows = [
-  [100, 150, 200, 201],
-  [50, null, null, null],
-  [17, 18, 19, 20],
-  [13, 14, 15, 16],
-  [9, 10, 11, 12],
-  [5, 6, 7, 8],
-  [1, 2, 3, 4],
+  [50, 100, 150, 200, 201],
+  [16, 17, 18, 19, 20],
+  [11, 12, 13, 14, 15],
+  [6, 7, 8, 9, 10],
+  [1, 2, 3, 4, 5],
 ];
 const buttons = new Map();
 let lastPress = { floor: null, time: -Infinity };
-for (const [rowIndex, row] of rows.entries())
-  for (const [columnIndex, floor] of row.entries()) {
-    if (floor === null) continue;
+for (const row of rows)
+  for (const floor of row) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `floor-btn${floor >= 50 ? " express" : ""}${floor === 1 ? " main-floor" : ""}`;
     button.dataset.floor = floor;
-    button.style.setProperty("--row", rowIndex + 1);
-    button.style.setProperty("--column", columnIndex + 1);
-    button.style.setProperty(
-      "--compact-row",
-      floor > 20 ? 1 : Math.floor((20 - floor) / 5) + 2,
-    );
-    button.style.setProperty(
-      "--compact-column",
-      floor > 20
-        ? [50, 100, 150, 200, 201].indexOf(floor) + 1
-        : ((floor - 1) % 5) + 1,
-    );
     button.setAttribute("aria-label", spokenFloor(floor));
     button.setAttribute("aria-pressed", "false");
     const label = document.createElement("span");
@@ -174,7 +159,7 @@ document.addEventListener("visibilitychange", () => {
   lastFrame = performance.now();
 });
 
-// Seven-segment geometry, shared by the two floor indicators.
+// Seven-segment geometry for the panel floor indicator.
 const segments = {
   a: "8,2 32,2 36,6 31,10 9,10 4,6",
   b: "33,12 38,8 38,31 34,35 30,31 30,16",
@@ -234,8 +219,6 @@ const phaseNames = {
 };
 function render() {
   renderDigits(engine.floor);
-  $("doorway").style.setProperty("--door-open", `${engine.door * 100}%`);
-  $("landingFloor").textContent = `${floorLabel(Math.round(engine.position))}F`;
   const displayDirection = engine.phase === "idle" ? 0 : engine.direction;
   for (const arrow of document.querySelectorAll("[data-direction]")) {
     arrow.classList.toggle("active", displayDirection !== 0);
@@ -256,16 +239,6 @@ function render() {
   $("screenMessage").textContent = engine.intercom
     ? "非常呼出中（体験）"
     : phaseNames[engine.phase];
-  $("phaseLabel").textContent = phaseNames[engine.phase];
-  $("targetLabel").textContent = engine.target
-    ? `${floorLabel(engine.target)}F`
-    : "—";
-  $("speedLabel").textContent = `${(engine.speed * 4).toFixed(1)} m/s`;
-  $("queueLabel").textContent =
-    [...engine.pending]
-      .sort((a, b) => a - b)
-      .map((f) => `${floorLabel(f)}F`)
-      .join("・") || "なし";
   audio.motor(engine.speed);
 }
 let lastFrame = performance.now();

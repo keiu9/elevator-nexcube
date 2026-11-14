@@ -10,186 +10,105 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="エレベーター" />
     <title>NEXCUBE — エレベーター体験</title>
-    <link rel="stylesheet" href="styles.css?v=2" />
+    <link rel="stylesheet" href="styles.css?v=3" />
   </head>
   <body>
     <main class="experience">
-      <header class="toolbar">
-        <div class="identity">
-          <span class="identity-mark" aria-hidden="true">↕</span>
-          <div>
-            <h1>エレベーター体験</h1>
-            <p>NEXCUBE · 1–200F / R</p>
+      <h1 class="sr-only">エレベーター操作盤</h1>
+      <section class="control-panel" aria-label="エレベーター操作盤">
+        <div class="panel-top">
+          <span>NEXCUBE</span><span class="speaker" aria-hidden="true"></span>
+        </div>
+        <div class="panel-screen">
+          <div class="indicator">
+            <span class="direction" data-direction aria-hidden="true">▲</span
+            ><span
+              class="floor-digits"
+              data-display
+              aria-label="現在階 1階"
+            ></span>
+          </div>
+          <div class="screen-message" id="screenMessage">
+            ドアが開いています
           </div>
         </div>
-        <div class="tools">
+        <div
+          class="floor-btn-grid"
+          id="floorGrid"
+          aria-label="行先階ボタン"
+        ></div>
+        <div class="door-controls">
           <button
-            id="soundButton"
-            class="tool-button"
+            class="door-button open-button"
+            id="openButton"
             type="button"
-            aria-pressed="true"
-            aria-label="音声を切り替える"
+            aria-label="ドアを開く"
           >
-            音声 ON
+            <svg viewBox="0 0 48 28" aria-hidden="true">
+              <path d="M20 3 7 14l13 11M28 3l13 11-13 11M24 2v24" /></svg
+            ><span>開</span>
           </button>
-          <button id="resetButton" class="tool-button" type="button">
-            最初から
+          <button
+            class="door-button close-button"
+            id="closeButton"
+            type="button"
+            aria-label="ドアを閉じる"
+          >
+            <svg viewBox="0 0 48 28" aria-hidden="true">
+              <path d="m5 3 13 11L5 25M43 3 30 14l13 11M24 2v24" /></svg
+            ><span>閉</span>
           </button>
         </div>
-      </header>
-      <section class="cabin" aria-label="エレベーターのかご内">
-        <div class="ceiling-light" aria-hidden="true"></div>
-        <div class="door-bay">
-          <div class="overhead">
-            <div class="overhead-id">01 <span>号機</span></div>
-            <div
-              class="indicator overhead-indicator"
-              aria-label="現在階と運転方向"
+        <div class="panel-bottom">
+          <div class="intercom-row">
+            <span>非常呼出<small>INTERCOM</small></span
+            ><button
+              class="call-button"
+              id="callButton"
+              type="button"
+              aria-label="非常呼出の体験"
+              aria-pressed="false"
             >
-              <span class="direction" data-direction aria-label="停止">▲</span>
-              <span
-                class="floor-digits"
-                data-display
-                aria-label="現在階 1階"
-              ></span>
-            </div>
-            <span class="overhead-caption">定員 24名<br />積載 1,600kg</span>
+              <svg viewBox="0 0 32 32" aria-hidden="true">
+                <path
+                  d="M11 5 6 8c-2 7 11 20 18 18l3-5-7-4-3 3c-3-1-4-3-5-5l3-3Z"
+                />
+              </svg>
+            </button>
           </div>
-          <div class="door-frame">
-            <div class="doorway" id="doorway">
-              <div class="landing" aria-hidden="true">
-                <div class="hall-light"></div>
-                <div class="hall-wall">
-                  <span id="landingFloor">1F</span><small>ELEVATOR HALL</small>
-                </div>
-                <div class="hall-floor"></div>
-              </div>
-              <div class="door-panel left" aria-hidden="true">
-                <span></span>
-              </div>
-              <div class="door-panel right" aria-hidden="true">
-                <span></span>
-              </div>
-              <div class="door-seam" aria-hidden="true"></div>
-            </div>
-            <div class="threshold" aria-hidden="true"></div>
-          </div>
-          <div class="door-notice">
-            <span class="notice-symbol" aria-hidden="true">!</span>
-            ドアにご注意ください
+          <div class="panel-tools">
+            <button
+              id="soundButton"
+              class="tool-button"
+              type="button"
+              aria-pressed="true"
+              aria-label="音声を切り替える"
+            >
+              音声 ON
+            </button>
+            <button id="resetButton" class="tool-button" type="button">
+              最初から
+            </button>
           </div>
         </div>
-        <div class="panel-wall">
-          <section class="control-panel" aria-label="エレベーター操作盤">
-            <div class="panel-top">
-              <span>NEXCUBE</span
-              ><span class="speaker" aria-hidden="true"></span>
-            </div>
-            <div class="panel-screen">
-              <div class="indicator">
-                <span class="direction" data-direction aria-hidden="true"
-                  >▲</span
-                ><span
-                  class="floor-digits"
-                  data-display
-                  aria-label="現在階 1階"
-                ></span>
-              </div>
-              <div class="screen-message" id="screenMessage">
-                ドアが開いています
-              </div>
-            </div>
-            <div
-              class="floor-btn-grid"
-              id="floorGrid"
-              aria-label="行先階ボタン"
-            ></div>
-            <div class="door-controls">
-              <button
-                class="door-button open-button"
-                id="openButton"
-                type="button"
-                aria-label="ドアを開く"
-              >
-                <svg viewBox="0 0 48 28" aria-hidden="true">
-                  <path d="M20 3 7 14l13 11M28 3l13 11-13 11M24 2v24" /></svg
-                ><span>開</span>
-              </button>
-              <button
-                class="door-button close-button"
-                id="closeButton"
-                type="button"
-                aria-label="ドアを閉じる"
-              >
-                <svg viewBox="0 0 48 28" aria-hidden="true">
-                  <path d="m5 3 13 11L5 25M43 3 30 14l13 11M24 2v24" /></svg
-                ><span>閉</span>
-              </button>
-            </div>
-            <div class="intercom-row">
-              <span>非常呼出<small>INTERCOM</small></span
-              ><button
-                class="call-button"
-                id="callButton"
-                type="button"
-                aria-label="非常呼出の体験"
-                aria-pressed="false"
-              >
-                <svg viewBox="0 0 32 32" aria-hidden="true">
-                  <path
-                    d="M11 5 6 8c-2 7 11 20 18 18l3-5-7-4-3 3c-3-1-4-3-5-5l3-3Z"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div class="panel-brand">
-              <span class="diamonds" aria-hidden="true">◆</span
-              ><span>MITSUBISHI ELECTRIC</span>
-            </div>
-            <div class="panel-screw" aria-hidden="true"></div>
-          </section>
+        <div
+          class="announcement sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span id="announcement">行先階のボタンを押してください</span>
         </div>
-        <div class="cabin-base" aria-hidden="true"></div>
+        <div class="panel-brand">
+          <span class="diamonds" aria-hidden="true">◆</span
+          ><span>MITSUBISHI ELECTRIC</span>
+        </div>
+
+        <div class="panel-screw" aria-hidden="true"></div>
       </section>
-      <div
-        class="announcement"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <span class="sound-indicator" aria-hidden="true">◖</span
-        ><span id="announcement">行先階のボタンを押してください</span>
-      </div>
-      <p class="hint">
-        行先を押して出発 · 予約した階はすばやく2回押すと取消
-        ·「開」は押し続けて戸開保持
-      </p>
-      <details class="operation-details">
-        <summary>運転状況</summary>
-        <dl>
-          <div>
-            <dt>状態</dt>
-            <dd id="phaseLabel">待機中</dd>
-          </div>
-          <div>
-            <dt>次の停車階</dt>
-            <dd id="targetLabel">—</dd>
-          </div>
-          <div>
-            <dt>速度</dt>
-            <dd id="speedLabel">0.0 m/s</dd>
-          </div>
-          <div>
-            <dt>予約階</dt>
-            <dd id="queueLabel">なし</dd>
-          </div>
-        </dl>
-        <p>非常呼出は体験用です。外部への通報は行いません。</p>
-      </details>
-      <footer>エレベーターの操作を楽しむシミュレーター</footer>
     </main>
-    <script src="elevator.js?v=2"></script>
-    <script src="audio.js?v=2"></script>
-    <script src="app.js?v=2"></script>
+    <script src="elevator.js?v=3"></script>
+    <script src="audio.js?v=3"></script>
+    <script src="app.js?v=3"></script>
   </body>
 </html>
